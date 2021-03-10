@@ -331,3 +331,9 @@ cat("Gene symbols saved in:", out.file, "\n")
 * look for conserved sequence motifs  
 * [...]  
 
+### Gene set enrichment analysis  
+Best website: https://maayanlab.cloud/Enrichr/  
+
+R package for enrichr analyses:  
+[enrichR: An R interface to the Enrichr database](https://CRAN.R-project.org/package=enrichR)
+
