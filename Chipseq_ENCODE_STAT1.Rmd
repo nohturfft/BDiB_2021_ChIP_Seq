@@ -1,0 +1,333 @@
+---
+title: "What are the physical target genes of the transcription factor STAT1?"
+author: "Axel Nohturfft"
+date: "`r Sys.Date()`"
+output: 
+  html_notebook:
+    toc: TRUE
+    toc_float: TRUE
+    toc_depth: 3
+    code_folding: "hide"
+---
+
+```{css}
+p {color:purple}
+h2 {background: darkblue;color: white;padding-left: 7px;}
+h3 {color: green;}
+```
+
+## Background  
+Please review the Powerpoint presentation.  
+
+
+## Objective:  
+Find genes near STAT1 Chip-Seq peaks
+
+## Introduction:  
+As a starting point of our analyses we'll use a large table of ChIP-seq data from the [ENCODE project](https://www.genome.gov/10005107/). This so-called 'summary track' is a table that contains processed peak locations for 161 transcription factors from 91 different cell lines. The file lists the chromosomal coordinates of each peak, but provides no information about nearby genes.
+We will extract STAT1 peaks that were found in at least two cell lines, identify nearby genes, do some cleaning up, and save the gene symbols.
+
+## Script overview:  
+
+1. Clear memory and console
+2. Load packages
+3. Document info + set working directory
+4. Read ChIP-seq peak data from ENCODE
+5. Add column headers to ChIP-seq data frame
+6. Extract data specific for STAT1
+7. Are all the peaks unique?
+8. How many experiments are the STAT1 peaks based on?
+9. Keep only peaks found in at least 2 experiments
+10. Keep only peaks with a score of least 400
+11. For each peak find the nearest gene (ChIPpeakAnno package)
+12. Add gene symbols and gene titles (ChIPpeakAnno package)
+13. How far is each peak from the nearest TSS?
+14. Keep only those peaks that are within 1000 bp of a transcription start site
+15. Keep only rows with an unambiguous gene symbol
+16. Save gene symbols
+
+## Setting things up...  
+```{r echo=FALSE}
+getwd()
+rm(list=ls(all=T)) # clear memory
+cat("\014") # clear console
+options(stringsAsFactors = FALSE)
+```
+
+### Define directory with packages  
+Packages provide specialized functions that extend the capabilities of basic R.
+To find packages and information on how to install them, visit the CRAN or Bioconductor sites:  
+[http://cran.r-project.org/web/packages/](http://cran.r-project.org/web/packages/)  
+[http://www.bioconductor.org/](http://www.bioconductor.org/)  
+
+To get a list of all the functions and data provided by a specific package run the following code   `help(package="ChIPpeakAnno")`.  
+On CRAN and Bioconductor you will also find detailed Manuals + often so-called 'Vignettes' that provide worked examples.  
+
+### Load Packages  
+```{r}
+source("packages.R")
+```
+
+### Script name + working directory  
+This is where the `rstudioapi` package is very useful.  
+
+```{r}
+(this.script <- rstudioapi::getActiveDocumentContext() %>% .$path %>% basename)
+```
+
+Files in working directory:  
+<pre>`r list.files()`</pre>
+
+## Read and prepare ChIP-seq peak data from ENCODE  
+The dataset from ENCODE that we'll use for this tutorial is a "summary track" that contains the ChIP-seq peak data compiled from many experiments, using a large number of antibodies and cell lines. This summary track was designed to display ChIP-seq peaks in the UCSC Genome Browser, but is also an excellent resource for data mining.  
+The original ENCODE track was downloaded from this site: [http://hgdownload.cse.ucsc.edu/goldenpath/hg19/encodeDCC/wgEncodeRegTfbsClustered/](http://hgdownload.cse.ucsc.edu/goldenpath/hg19/encodeDCC/wgEncodeRegTfbsClustered/)  
+... and is described here:  
+[http://genome.ucsc.edu/cgi-bin/hgTrackUi?db=hg19&g=wgEncodeRegTfbsClusteredV3](http://genome.ucsc.edu/cgi-bin/hgTrackUi?db=hg19&g=wgEncodeRegTfbsClusteredV3)  
+
+Column headers:  
+bin  chrom  chromStart	chromEnd	name	score	expCount	expNums	expScores
+
+The '.gz' extension of the data file name indicates that the file has been compressed (the current file size is 85MB; uncompressed it would be 256MB!). Conveniently, R opens gzip-compressed files without needing special instructions.
+
+### Download data file from the cloud:  
+(This could take a moment ...)
+```{r}
+the.url <- paste0("http://hgdownload.cse.ucsc.edu/goldenpath/hg19/",
+                  "encodeDCC/wgEncodeRegTfbsClustered/",
+                  "wgEncodeRegTfbsClusteredV3.bed.gz")
+track.file <- "wgEncodeRegTfbsClusteredV3.bed.gz"
+if (!file.exists(track.file)) {
+  download.file(url=the.url, destfile = track.file)
+}
+rm(the.url)
+```
+
+### Open data file  / read track data  
+```{r}
+df <- readr::read_tsv(file=track.file,
+                      col_names=FALSE,
+                      col_types = list(col_character(), col_integer(), col_integer(),
+                                       col_character(), col_integer(), col_integer(),
+                                       col_character(), col_character()),
+                      n_max=4380460, progress = FALSE)
+df <- as.data.frame(df)
+cat("Size of data frame:\n")
+pryr::object_size(df)
+```
+
+
+Object class:  
+```{r}
+class(df)
+```
+
+Dimensions of the data frame:
+```{r}
+cat(paste(comma(dim(df)), c("rows", "columns"), collapse=" and "))
+```
+
+
+The `names()` function returns the column headers of a data frame. Currently, no useful column header have been defined for 'df'; so R assigned some default names:
+```{r}
+names(df)
+```
+
+### Add column headers to chip-seq data frame  
+Based on track information from ENCODE at the UCSC Genome brower [page](http://genome.ucsc.edu/cgi-bin/hgTrackUi?db=hg19&g=wgEncodeRegTfbsClusteredV3) we now assign descriptive column headers to the data frame. The following table shows the first 10 rows:  
+```{r}
+names(df) <- c("chrom", "chromStart", "chromEnd", "name", "score", "expCount", "expNums", "expScores")
+# Print the first 10 rows:
+head(df, 10) %>% knitr::kable(., align=rep("c", ncol(df)))
+```
+
+### Print all transcription factors covered by this dataset:  
+The gene symbols for the transcription factors that have been analyzed here are found in the 'name' column of the data frame...  
+```{r}
+df$name %>% as.character %>% unique %>% sort %>% paste(collapse=", ") %>% cat
+```
+
+How many transcription factors were analyzed?  
+```{r}
+df$name %>% as.character %>% unique %>% length %>% cat
+```
+
+## Extract data specific for STAT1  
+... and print the number of STAT1 peaks:  
+```{r}
+tf <- "STAT1"
+s1 <- subset(df, name==tf)
+# We use the 'format' function to print the row number with a thousands separator:
+nrow(s1) %>% format(big.mark=",") %>% cat
+```
+
+How 'big' is the new (s1) object in bytes?
+```{r}
+pryr::object_size(s1) #%>% format(big.mark=",") %>% cat
+```
+
+Consider clearing some memory by removing the original data frame:
+```{r clear memory, warning=FALSE, echo=FALSE, result="hide"}
+# rm(df)
+gc(verbose=FALSE) # gc = "collect garbage (ensures that freed emory becomes available to the OS)"
+```
+
+### How many experiments are the STAT1 peaks based on?  
+Get the lowest and highest values in the 'expCount' column in data frame 's1':
+```{r}
+range(s1$expCount) %>% cat
+```
+Conclusion: the STAT1 antibody was apparently used on 6 different cell lines.  
+Some peaks were found in just 1 cell line; other peaks were found in as many as 6 cell lines.
+
+The 'table' function counts how often each element of a vector occurs:
+```{r}
+table(s1$expCount)
+```
+
+We can make this table easier to read by converting to a data frame and adding column headers:  
+```{r}
+table(s1$expCount) %>%
+  as.data.frame %>%
+  magrittr::set_colnames(c("Cell.line.count", "Peak.count")) %>% 
+  knitr::kable(., align = rep("c", 2))
+```
+
+Meaning:
+
+* 16,045 peaks were found in only 1 cell line  
+* 1,745 peaks were found in 2 cell lines  
+* 862 peaks were found in 3 cell lines
+* etc.  
+
+So the majority of peaks are found in only 1 cell line, indicating that STAT1 binding is very cell type-specific!  
+The biological implications of that result alone are substantial ...   
+
+### Keep only peaks found in at least 2 experiments:  
+Then print the number of remaining peaks.
+```{r}
+s2 <- subset(s1, expCount >= 2)
+nrow(s2) %>% format(big.mark=",") %>% cat
+```
+
+### Keep only peaks with a 'high' score  
+Before we decide on where to set the cutoff, what is the distribution of score values? Print a histogram using the `hist()` function:
+```{r}
+hist(s2$score, xlab="Score", ylab="Count", main="Histogram of Stat1 peak scores")
+```
+
+
+Keep only peaks with a score of least 400 and print the number of remaining peaks:
+```{r}
+s3 <- subset(s2, score >= 400)
+nrow(s3) %>% format(big.mark=",") %>% cat
+```
+
+
+## Annotate peaks  
+For each peak we want to find the nearest gene and the distance to that gene. But first we have to change the format of our data before they can be fed into the `ChIPpeakAnno::annotatePeakInBatch()` function...  
+
+### Convert data to bed format  
+The 'bed' format is commonly used to tabulate chromosome/gene regions, including peak coordinates generated by ChIP-seq.  
+Print first 4 rows of the new bed data frame:  
+```{r}
+bed <- s3[,1:5] # Keep only columns 1 to 5
+bed$strand <- "+" # Add a 'stand' column
+head(bed, 4) %>% knitr::kable(., row.names=FALSE, align=rep("c", ncol(bed)))
+```
+
+### Convert the bed object to 'RangedData' format
+The function that will later annotate the peaks requires the input in "GRanges" format (`IRanges` package). The table will show the first 6 rows:  
+```{r}
+gr <- with(bed, GRanges(seqnames=chrom, ranges=IRanges(chromStart, chromEnd), id=name, score=score, strand=strand))
+gr 
+```
+
+
+### Now find the nearest gene for each peak  
+Depending on the computer / platform used, the following code can take a while to execute.....  
+Then print the first 6 rows and 3 columns from the resulting RangedData table.  
+The 'feature' column will contain the Ensembl ID for the nearest gene.  
+```{r}
+data(TSS.human.GRCh37) # human genome transcript data used by annotatePeakInBatch
+anno.gr <- ChIPpeakAnno::annotatePeakInBatch(gr, AnnotationData=TSS.human.GRCh37)
+# class(anno.gr) # "GRanges"
+# anno.gr
+head(anno.gr[,c(1,4,10)])
+```
+
+### Add gene symbols and gene titles  
+```{r}
+anno.gr.gs <- ChIPpeakAnno::addGeneIDs(anno.gr, orgAnn="org.Hs.eg.db", IDs2Add=c("symbol", "genename"))
+cat("... done.\n")
+head(anno.gr.gs[,c(1,10,12,13)])
+```
+
+Convert results to data frame and print the first few rows:
+```{r}
+anno.df <- as.data.frame(anno.gr.gs, stringsAsFactors=FALSE) %>% 
+  magrittr::set_rownames(NULL)
+head(anno.df)
+```
+
+### How far are the various peaks from the nearest transcription start site (TSS)?  
+Let's start by looking at the range of distances.
+```{r}
+range(anno.df$shortestDistance) %>% format(big.mark=",") %>% cat # 1 406,432
+```
+
+Plot distance distribution as a histogram.
+```{r}
+q <- quantile(anno.df$shortestDistance, 0.95) # 73873.3
+# >> 95% of peak are within 73,873 bp of a TSS
+ss.95 <- subset(anno.df, abs(distancetoFeature) < q)
+hist(ss.95$distancetoFeature, xlab="Distance to TSS", ylab="Count", main="Distances to nearest TSS")
+```
+
+Now let's do some cleaning up ...  
+
+### Keep only those peaks that are within 1000 bp of a transcription start site  
+```{r}
+peaks.1k <- subset(anno.df, shortestDistance <= 1000)
+nrow(peaks.1k)  %>% cat
+```
+
+### Keep only rows with an unambiguous gene symbol  
+The `is.na(x)` command determines whether any of the values in X are NA and returns a vector of logical (TRUE/FALSE) values. The `sum()` function coerces logical values into 1s and 0s:
+```{r}
+is.na(peaks.1k$symbol) %>% sum %>% cat("Number of NAs:", .)
+```
+
+Remove rows where the gene symbol is '<NA>'. The exclamation mark (! means 'not') inverts the TRUE/FALSE values:
+```{r}
+peaks.1k <- peaks.1k[!is.na(peaks.1k$symbol),]
+nrow(peaks.1k) %>% cat("Remaining peaks:", .)
+```
+
+Are the gene symbols unique?
+```{r}
+cat("Any duplicated gene symbols?", any(duplicated(peaks.1k$symbol)))
+```
+
+```{r}
+cat("How many unique gene symbols?", length(unique(peaks.1k$symbol)))
+```
+
+
+### Save gene symbols  
+```{r}
+genes <- peaks.1k$symbol %>% unique %>% sort
+cat(genes, sep=", ")
+```
+
+```{r}
+out.file <- "STAT1_targets_1k.txt"
+cat(genes, sep="\n", file=out.file)
+cat("Gene symbols saved in:", out.file, "\n")
+```
+
+## Next?  
+
+* gene set enrichment analysis  
+* look for conserved sequence motifs  
+* [...]  
+
