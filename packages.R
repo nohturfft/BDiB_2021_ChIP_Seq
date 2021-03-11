@@ -7,7 +7,7 @@
 # help(package="ChIPpeakAnno")
 # help(package="biomaRt")
 
-requireNamespace("readr")
+library(readr)
 requireNamespace("knitr")
 library(scales)
 
