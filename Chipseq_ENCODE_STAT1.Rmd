@@ -71,8 +71,9 @@ source("packages.R")
 ### Script name + working directory  
 This is where the `rstudioapi` package is very useful.  
 
-```{r}
-(this.script <- rstudioapi::getActiveDocumentContext() %>% .$path %>% basename)
+```{r Current script, results="asis"}
+this.script <- rstudioapi::getActiveDocumentContext() %>% .$path %>% basename
+cat("Current script:<b>", this.script, "</b>")
 ```
 
 Files in working directory:  
@@ -155,6 +156,7 @@ df$name %>% as.character %>% unique %>% length %>% cat
 ... and print the number of STAT1 peaks:  
 ```{r}
 tf <- "STAT1"
+stopifnot(tf %in% df$name)
 s1 <- subset(df, name==tf)
 # We use the 'format' function to print the row number with a thousands separator:
 nrow(s1) %>% format(big.mark=",") %>% cat
@@ -166,8 +168,8 @@ pryr::object_size(s1) #%>% format(big.mark=",") %>% cat
 ```
 
 Consider clearing some memory by removing the original data frame:
-```{r clear memory, warning=FALSE, echo=FALSE, result="hide"}
-# rm(df)
+```{r clear memory, warning=FALSE, echo=FALSE, results="hide"}
+rm(df)
 gc(verbose=FALSE) # gc = "collect garbage (ensures that freed emory becomes available to the OS)"
 ```
 
@@ -220,6 +222,10 @@ Keep only peaks with a score of least 400 and print the number of remaining peak
 ```{r}
 s3 <- subset(s2, score >= 400)
 nrow(s3) %>% format(big.mark=",") %>% cat
+```
+
+```{r}
+head(s3)
 ```
 
 
@@ -300,6 +306,7 @@ is.na(peaks.1k$symbol) %>% sum %>% cat("Number of NAs:", .)
 Remove rows where the gene symbol is '<NA>'. The exclamation mark (! means 'not') inverts the TRUE/FALSE values:
 ```{r}
 peaks.1k <- peaks.1k[!is.na(peaks.1k$symbol),]
+peaks.1k$symbol <- gsub(";", "\n", peaks.1k$symbol)
 nrow(peaks.1k) %>% cat("Remaining peaks:", .)
 ```
 
